@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>My Calendar</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #f4f6f8;
+            color: #222;
+        }
+
+        .container {
+            width: min(700px, 92%);
+            margin: 50px auto;
+        }
+
+        .card {
+            background: white;
+            padding: 25px;
+            border-radius: 14px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
+            margin-bottom: 20px;
+        }
+
+        h1, h2 {
+            margin-top: 0;
+        }
+
+        input,
+        button {
+            width: 100%;
+            padding: 12px;
+            margin-top: 10px;
+            border-radius: 8px;
+            font-size: 15px;
+        }
+
+        input {
+            border: 1px solid #ccc;
+        }
+
+        button {
+            border: none;
+            background: #2563eb;
+            color: white;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        button:hover {
+            background: #1d4ed8;
+        }
+
+        .logout {
+            background: #dc2626;
+        }
+
+        .logout:hover {
+            background: #b91c1c;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .message {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 8px;
+            background: #eef2ff;
+        }
+
+        .error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .event {
+            border-left: 4px solid #2563eb;
+            background: #f8fafc;
+            padding: 12px;
+            margin-top: 10px;
+            border-radius: 6px;
+        }
+
+        .event-date {
+            font-weight: bold;
+        }
+
+        .empty {
+            color: #777;
+            text-align: center;
+            padding: 20px;
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <!-- LOGIN -->
+    <div id="loginScreen" class="card">
+        <h1>My Calendar</h1>
+
+        <p>Log in with your username and magic number.</p>
+
+        <input
+            id="username"
+            type="text"
+            placeholder="Username"
+        >
+
+        <input
+            id="magicNumber"
+            type="text"
+            placeholder="Magic number"
+        >
+
+        <button onclick="login()">
+            Login
+        </button>
+
+        <div id="loginMessage"></div>
+    </div>
+
+
+    <!-- APPLICATION -->
+    <div id="appScreen" class="hidden">
+
+        <div class="card">
+            <h1>Welcome, <span id="userName"></span> 👋</h1>
+
+            <button class="logout" onclick="logout()">
+                Logout
+            </button>
+        </div>
+
+
+        <!-- ADD EVENT -->
+        <div class="card">
+            <h2>Add an event</h2>
+
+            <input
+                id="eventDate"
+                type="datetime-local"
+            >
+
+            <input
+                id="eventDescription"
+                type="text"
+                placeholder="Description"
+            >
+
+            <button onclick="addEvent()">
+                Add Event
+            </button>
+
+            <div id="eventMessage"></div>
+        </div>
+
+
+        <!-- CALENDAR -->
+        <div class="card">
+            <h2>Upcoming Events</h2>
+
+            <button onclick="loadCalendar()">
+                Refresh
+            </button>
+
+            <div id="events">
+                <div class="empty">
+                    Loading events...
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+</div>
+
+
+<script>
+
+    // -----------------------------------------------------
+    // HELPERS
+    // -----------------------------------------------------
+
+    function showMessage(element, message, error = false) {
+        element.innerHTML = `
+            <div class="message ${error ? "error" : ""}">
+                ${message}
+            </div>
+        `;
+    }
+
+
+    // -----------------------------------------------------
+    // LOGIN
+    // -----------------------------------------------------
+
+    async function login() {
+
+        const username =
+            document.getElementById("username").value.trim();
+
+        const magicNumber =
+            document.getElementById("magicNumber").value.trim();
+
+        const message =
+            document.getElementById("loginMessage");
+
+
+        if (!username || !magicNumber) {
+            showMessage(
+                message,
+                "Please enter both username and magic number.",
+                true
+            );
+
+            return;
+        }
+
+
+        try {
+
+            /*
+             * The Flask login route sets the session cookie.
+             *
+             * We use fetch rather than navigating directly so that
+             * the frontend remains visible.
+             */
+            const response = await fetch(
+                `/user/${encodeURIComponent(username)}/${encodeURIComponent(magicNumber)}`,
+                {
+                    credentials: "same-origin"
+                }
+            );
+
+
+            if (!response.ok) {
+
+                let data = {};
+
+                try {
+                    data = await response.json();
+                } catch (_) {}
+
+                showMessage(
+                    message,
+                    data.error || "Login failed.",
+                    true
+                );
+
+                return;
+            }
+
+
+            /*
+             * The login endpoint redirects to /profile.
+             * fetch follows the redirect automatically.
+             */
+
+            const data = await response.json();
+
+            if (!data.logged_in) {
+                showMessage(
+                    message,
+                    "Login failed.",
+                    true
+                );
+
+                return;
+            }
+
+
+            document.getElementById("loginScreen")
+                .classList.add("hidden");
+
+            document.getElementById("appScreen")
+                .classList.remove("hidden");
+
+            document.getElementById("userName")
+                .textContent = data.user;
+
+
+            // Load the user's events
+            loadCalendar();
+
+        } catch (error) {
+
+            showMessage(
+                message,
+                "Could not connect to the server.",
+                true
+            );
+
+            console.error(error);
+        }
+    }
+
+
+    // -----------------------------------------------------
+    // LOAD CALENDAR
+    // -----------------------------------------------------
+
+    async function loadCalendar() {
+
+        const eventsContainer =
+            document.getElementById("events");
+
+        eventsContainer.innerHTML =
+            `<div class="empty">Loading...</div>`;
+
+
+        try {
+
+            const response = await fetch(
+                "/calendar",
+                {
+                    credentials: "same-origin"
+                }
+            );
+
+
+            if (response.status === 401) {
+                showLogin();
+                return;
+            }
+
+
+            const data = await response.json();
+
+
+            if (!response.ok) {
+                throw new Error(
+                    data.error || "Could not load calendar."
+                );
+            }
+
+
+            displayEvents(data.dates);
+
+        } catch (error) {
+
+            eventsContainer.innerHTML = `
+                <div class="message error">
+                    ${error.message}
+                </div>
+            `;
+
+            console.error(error);
+        }
+    }
+
+
+    // -----------------------------------------------------
+    // DISPLAY EVENTS
+    // -----------------------------------------------------
+
+    function displayEvents(events) {
+
+        const container =
+            document.getElementById("events");
+
+
+        if (!events || events.length === 0) {
+
+            container.innerHTML = `
+                <div class="empty">
+                    No upcoming events.
+                </div>
+            `;
+
+            return;
+        }
+
+
+        container.innerHTML = "";
+
+
+        events.forEach(event => {
+
+            const div =
+                document.createElement("div");
+
+            div.className = "event";
+
+
+            const date =
+                new Date(event.date);
+
+
+            const formattedDate =
+                date.toLocaleString();
+
+
+            div.innerHTML = `
+                <div class="event-date">
+                    ${formattedDate}
+                </div>
+
+                <div>
+                    ${escapeHtml(event.description || "No description")}
+                </div>
+            `;
+
+
+            container.appendChild(div);
+        });
+    }
+
+
+    // -----------------------------------------------------
+    // ADD EVENT
+    // -----------------------------------------------------
+
+    async function addEvent() {
+
+        const date =
+            document.getElementById("eventDate").value;
+
+        const description =
+            document.getElementById("eventDescription").value.trim();
+
+        const message =
+            document.getElementById("eventMessage");
+
+
+        if (!date) {
+
+            showMessage(
+                message,
+                "Please select a date and time.",
+                true
+            );
+
+            return;
+        }
+
+
+        try {
+
+            const response = await fetch(
+                "/add_date",
+                {
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+
+                    credentials: "same-origin",
+
+                    body: JSON.stringify({
+                        date: date + ":00",
+                        description: description
+                    })
+                }
+            );
+
+
+            const data =
+                await response.json();
+
+
+            if (!response.ok) {
+
+                showMessage(
+                    message,
+                    data.error || "Could not add event.",
+                    true
+                );
+
+                return;
+            }
+
+
+            showMessage(
+                message,
+                "Event added successfully!"
+            );
+
+
+            // Clear form
+            document.getElementById("eventDate").value = "";
+            document.getElementById("eventDescription").value = "";
+
+
+            // Refresh events
+            loadCalendar();
+
+        } catch (error) {
+
+            showMessage(
+                message,
+                "Could not connect to the server.",
+                true
+            );
+
+            console.error(error);
+        }
+    }
+
+
+    // -----------------------------------------------------
+    // LOGOUT
+    // -----------------------------------------------------
+
+    async function logout() {
+
+        try {
+
+            await fetch(
+                "/logout",
+                {
+                    credentials: "same-origin"
+                }
+            );
+
+        } catch (error) {
+            console.error(error);
+        }
+
+
+        showLogin();
+    }
+
+
+    // -----------------------------------------------------
+    // SHOW LOGIN SCREEN
+    // -----------------------------------------------------
+
+    function showLogin() {
+
+        document.getElementById("appScreen")
+            .classList.add("hidden");
+
+        document.getElementById("loginScreen")
+            .classList.remove("hidden");
+
+        document.getElementById("username").value = "";
+        document.getElementById("magicNumber").value = "";
+    }
+
+
+    // -----------------------------------------------------
+    // BASIC HTML ESCAPING
+    // -----------------------------------------------------
+
+    function escapeHtml(value) {
+
+        const div =
+            document.createElement("div");
+
+        div.textContent = value;
+
+        return div.innerHTML;
+    }
+
+
+    // -----------------------------------------------------
+    // CHECK EXISTING SESSION
+    // -----------------------------------------------------
+
+    async function checkSession() {
+
+        try {
+
+            const response =
+                await fetch(
+                    "/calendar",
+                    {
+                        credentials: "same-origin"
+                    }
+                );
+
+
+            if (!response.ok) {
+                return;
+            }
+
+
+            const data =
+                await response.json();
+
+
+            document.getElementById("loginScreen")
+                .classList.add("hidden");
+
+            document.getElementById("appScreen")
+                .classList.remove("hidden");
+
+            document.getElementById("userName")
+                .textContent = data.user;
+
+            displayEvents(data.dates);
+
+        } catch (error) {
+
+            console.log(
+                "No existing session."
+            );
+        }
+    }
+
+
+    // Check for an existing login when page opens
+    checkSession();
+
+</script>
+
+</body>
+</html>
